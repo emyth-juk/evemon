@@ -68,7 +68,9 @@ jobs:
         if: steps.sde-release.outputs.skip == 'false'
         shell: cmd
         run: |
-          copy tools\XmlGenerator\sqlite-latest.sqlite tools\XmlGenerator\bin\Release\net8.0-windows\sqlite-latest.sqlite
+          REM App.config has Data Source=..\..\sqlite-latest.sqlite
+          REM From net8.0-windows, ../.. resolves to bin/ (not XmlGenerator/)
+          copy tools\XmlGenerator\sqlite-latest.sqlite tools\XmlGenerator\bin\sqlite-latest.sqlite
           cd tools\XmlGenerator\bin\Release\net8.0-windows
           EVEMonXmlGenerator.exe
           if %ERRORLEVEL% NEQ 0 echo XmlGenerator exited with code %ERRORLEVEL%
