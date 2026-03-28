@@ -66,12 +66,12 @@ jobs:
 
       - name: Run XmlGenerator
         if: steps.sde-release.outputs.skip == 'false'
-        shell: cmd
-        working-directory: tools/XmlGenerator/bin/Release/net8.0-windows
+        shell: bash
         run: |
-          REM Console.ReadKey throws when stdin is redirected in CI,
-          REM but all file generation completes before that call.
-          EVEMonXmlGenerator.exe <nul || echo XmlGenerator exited (expected in CI)
+          # Copy DB next to the exe so App.config relative path resolves correctly
+          cp tools/XmlGenerator/sqlite-latest.sqlite tools/XmlGenerator/bin/Release/net8.0-windows/
+          cd tools/XmlGenerator/bin/Release/net8.0-windows
+          ./EVEMonXmlGenerator.exe || true
 
       - name: Check for changes
         if: steps.sde-release.outputs.skip == 'false'
