@@ -66,12 +66,12 @@ jobs:
 
       - name: Run XmlGenerator
         if: steps.sde-release.outputs.skip == 'false'
-        shell: bash
+        shell: cmd
         run: |
-          # Copy DB next to the exe so App.config relative path resolves correctly
-          cp tools/XmlGenerator/sqlite-latest.sqlite tools/XmlGenerator/bin/Release/net8.0-windows/
-          cd tools/XmlGenerator/bin/Release/net8.0-windows
-          ./EVEMonXmlGenerator.exe || true
+          copy tools\XmlGenerator\sqlite-latest.sqlite tools\XmlGenerator\bin\Release\net8.0-windows\sqlite-latest.sqlite
+          cd tools\XmlGenerator\bin\Release\net8.0-windows
+          EVEMonXmlGenerator.exe
+          if %ERRORLEVEL% NEQ 0 echo XmlGenerator exited with code %ERRORLEVEL%
 
       - name: Check for changes
         if: steps.sde-release.outputs.skip == 'false'
