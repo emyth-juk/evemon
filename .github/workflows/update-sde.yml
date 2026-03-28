@@ -123,43 +123,12 @@ jobs:
         if: steps.sde-release.outputs.skip == 'false' && steps.changes.outputs.changed == 'true'
         shell: bash
         run: |
-          BUILD=${{ steps.sde-release.outputs.build }}
-          DATE=$(date -u +"%d %B %Y")
-          REPO="${{ github.repository }}"
-          RELEASE_URL="https://github.com/${REPO}/releases/download/sde-${BUILD}"
-
-          # Generate updated datafiles section by computing MD5 for each file
-          {
-            echo '<?xml version="1.0" encoding="utf-8"?>'
-            echo '<evemon xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">'
-
-            # Preserve the existing newest and releases sections unchanged
-            sed -n '/<newest>/,/<\/newest>/p' updates/patch.xml
-            sed -n '/<releases>/,/<\/releases>/p' updates/patch.xml
-
-            # Generate datafiles section with new MD5s and release asset URLs
-            echo '  <datafiles>'
-            for f in src/EVEMon.Common/Resources/eve-*-en-US.xml.gzip; do
-              NAME=$(basename "$f")
-              MD5=$(md5sum "$f" | cut -d' ' -f1)
-              TYPE=$(echo "$NAME" | sed 's/eve-//;s/-en-US.xml.gzip//')
-              cat <<DATAFILE
-    <datafile>
-      <name>${NAME}</name>
-      <date>${DATE}</date>
-      <md5>${MD5}</md5>
-      <url>${RELEASE_URL}</url>
-      <message><![CDATA[SDE ${BUILD} ${TYPE} data file by the EVEMon Development Team
-NOT COMPATIBLE with EVEMon prior to version 2.2.0]]></message>
-    </datafile>
-DATAFILE
-            done
-            echo '  </datafiles>'
-            echo '</evemon>'
-          } > updates/patch.xml.new
-
-          mv updates/patch.xml.new updates/patch.xml
-          echo "Updated patch.xml with MD5s and release URLs"
+          chmod +x .github/scripts/update-patch-xml.sh
+          .github/scripts/update-patch-xml.sh \
+            "${{ steps.sde-release.outputs.build }}" \
+            "${{ github.repository }}" \
+            "updates/patch.xml" \
+            "src/EVEMon.Common/Resources"
 
       - name: Create branch and commit
         if: steps.sde-release.outputs.skip == 'false' && steps.changes.outputs.changed == 'true'
@@ -199,45 +168,47 @@ DATAFILE
           DATE=$(date -u +%Y-%m-%d)
           LARGE="${{ steps.diffcheck.outputs.large }}"
           CHANGED_SIZE="${{ steps.diffcheck.outputs.changed_size }}"
+          DIFF_STAT=$(git diff --stat HEAD~1)
 
-          # Size warning for unusually large updates
-          SIZE_NOTE=""
+          # Build PR body in a temp file to avoid YAML/heredoc issues
+          BODY_FILE=$(mktemp)
+          echo "## Summary" >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "Automated update of EVEMon datafiles from CCP's Static Data Export." >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "- **SDE Build:** $BUILD" >> "$BODY_FILE"
+          echo "- **Source:** [eve-sde-converter ${{ steps.sde-release.outputs.tag }}](https://github.com/noirsoldats/eve-sde-converter/releases/tag/${{ steps.sde-release.outputs.tag }})" >> "$BODY_FILE"
+          echo "- **Date:** $DATE" >> "$BODY_FILE"
+          echo "- **Release:** [sde-${BUILD}](https://github.com/${{ github.repository }}/releases/tag/sde-${BUILD})" >> "$BODY_FILE"
+
           if [ "$LARGE" = "true" ]; then
-            SIZE_NOTE="
-> **Warning:** This update is unusually large (${CHANGED_SIZE} bytes of changed datafiles). This may indicate a major game patch or warrants closer inspection before merging."
+            echo "" >> "$BODY_FILE"
+            echo "> **Warning:** This update is unusually large (${CHANGED_SIZE} bytes of changed datafiles). This may indicate a major game patch or warrants closer inspection before merging." >> "$BODY_FILE"
           fi
+
+          echo "" >> "$BODY_FILE"
+          echo "### Changes" >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "- Updated datafiles in \`src/EVEMon.Common/Resources/\`" >> "$BODY_FILE"
+          echo "- Updated \`updates/patch.xml\` with new MD5 checksums and release asset URLs" >> "$BODY_FILE"
+          echo "- Created release \`sde-${BUILD}\` with datafile assets for live patching" >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "### Changed files" >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "$DIFF_STAT" >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "## Test plan" >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "- [ ] Verify EVEMon loads without errors" >> "$BODY_FILE"
+          echo "- [ ] Spot-check new items/skills appear in the skill browser" >> "$BODY_FILE"
+          echo "- [ ] Verify live patching works (patch.xml points to correct release assets)" >> "$BODY_FILE"
 
           gh pr create \
             --title "Update datafiles for SDE $BUILD" \
-            --body "$(cat <<EOF
-## Summary
-
-Automated update of EVEMon datafiles from CCP's Static Data Export.
-
-- **SDE Build:** $BUILD
-- **Source:** [eve-sde-converter ${{ steps.sde-release.outputs.tag }}](https://github.com/noirsoldats/eve-sde-converter/releases/tag/${{ steps.sde-release.outputs.tag }})
-- **Date:** $DATE
-- **Release:** [sde-${BUILD}](https://github.com/${{ github.repository }}/releases/tag/sde-${BUILD})
-${SIZE_NOTE}
-
-### Changes
-
-- Updated datafiles in \`src/EVEMon.Common/Resources/\`
-- Updated \`updates/patch.xml\` with new MD5 checksums and release asset URLs
-- Created release \`sde-${BUILD}\` with datafile assets for live patching
-
-### Changed files
-
-$(git diff --stat HEAD~1)
-
-## Test plan
-
-- [ ] Verify EVEMon loads without errors
-- [ ] Spot-check new items/skills appear in the skill browser
-- [ ] Verify live patching works (patch.xml points to correct release assets)
-EOF
-          )" \
+            --body-file "$BODY_FILE" \
             --base main \
             --head "automated/sde-update-$BUILD"
+
+          rm -f "$BODY_FILE"
         env:
           GH_TOKEN: ${{ github.token }}
