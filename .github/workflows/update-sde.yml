@@ -34,8 +34,8 @@ jobs:
           BUILD=$(echo "$RELEASE" | sed 's/sde-//')
           echo "build=$BUILD" >> "$GITHUB_OUTPUT"
 
-          # Check if we already have a commit or branch for this version
-          if git log --oneline --all --grep="SDE $BUILD" | grep -q .; then
+          # Check if a PR branch for this version already exists
+          if git ls-remote --heads origin "automated/sde-update-$BUILD" | grep -q .; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "SDE $BUILD already applied, skipping."
           else
