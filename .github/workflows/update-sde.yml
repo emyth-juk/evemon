@@ -1,0 +1,129 @@
+name: Update SDE Datafiles
+
+on:
+  schedule:
+    # Check daily at 14:00 UTC (after CCP's typical downtime)
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-sde:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Get latest SDE release from eve-sde-converter
+        id: sde-release
+        shell: bash
+        run: |
+          RELEASE=$(gh release view --repo noirsoldats/eve-sde-converter --json tagName,publishedAt -q '.tagName')
+          echo "tag=$RELEASE" >> "$GITHUB_OUTPUT"
+
+          # Extract build number from tag (e.g., sde-3279491 -> 3279491)
+          BUILD=$(echo "$RELEASE" | sed 's/sde-//')
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+
+          # Check if we already have a commit or branch for this version
+          if git log --oneline --all --grep="SDE $BUILD" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "SDE $BUILD already applied, skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "New SDE version: $BUILD"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Download SDE database
+        if: steps.sde-release.outputs.skip == 'false'
+        shell: bash
+        run: |
+          gh release download ${{ steps.sde-release.outputs.tag }} \
+            --repo noirsoldats/eve-sde-converter \
+            --pattern "eve.db" \
+            --dir tools/XmlGenerator
+          # XmlGenerator expects sqlite-latest.sqlite
+          mv tools/XmlGenerator/eve.db tools/XmlGenerator/sqlite-latest.sqlite
+          echo "Downloaded SDE database (${{ steps.sde-release.outputs.tag }})"
+          ls -lh tools/XmlGenerator/sqlite-latest.sqlite
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Build XmlGenerator
+        if: steps.sde-release.outputs.skip == 'false'
+        run: dotnet build tools/XmlGenerator/XmlGenerator.csproj -c Release
+
+      - name: Run XmlGenerator
+        if: steps.sde-release.outputs.skip == 'false'
+        shell: cmd
+        working-directory: tools/XmlGenerator/bin/Release/net8.0-windows
+        run: |
+          REM Console.ReadKey throws when stdin is redirected in CI,
+          REM but all file generation completes before that call.
+          EVEMonXmlGenerator.exe <nul || echo XmlGenerator exited (expected in CI)
+
+      - name: Check for changes
+        if: steps.sde-release.outputs.skip == 'false'
+        id: changes
+        shell: bash
+        run: |
+          if git diff --quiet src/EVEMon.Common/Resources/ src/EVEMon.Common/Serialization/Flags.xml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No datafile changes detected."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Datafile changes detected:"
+            git diff --stat src/EVEMon.Common/Resources/ src/EVEMon.Common/Serialization/Flags.xml
+          fi
+
+      - name: Create Pull Request
+        if: steps.sde-release.outputs.skip == 'false' && steps.changes.outputs.changed == 'true'
+        shell: bash
+        run: |
+          BUILD=${{ steps.sde-release.outputs.build }}
+          BRANCH="automated/sde-update-$BUILD"
+          DATE=$(date -u +%Y-%m-%d)
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add src/EVEMon.Common/Resources/ src/EVEMon.Common/Serialization/Flags.xml
+          git commit -m "Update datafiles for SDE $BUILD ($DATE)"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "Update datafiles for SDE $BUILD" \
+            --body "$(cat <<EOF
+          ## Summary
+
+          Automated update of EVEMon datafiles from CCP's Static Data Export.
+
+          - **SDE Build:** $BUILD
+          - **Source:** [eve-sde-converter ${{ steps.sde-release.outputs.tag }}](https://github.com/noirsoldats/eve-sde-converter/releases/tag/${{ steps.sde-release.outputs.tag }})
+          - **Date:** $DATE
+
+          ### Changed files
+
+          $(git diff --stat HEAD~1)
+
+          ## Test plan
+
+          - [ ] Verify EVEMon loads without errors
+          - [ ] Spot-check new items/skills appear in the skill browser
+          EOF
+          )" \
+            --base main \
+            --head "$BRANCH"
+        env:
+          GH_TOKEN: ${{ github.token }}
